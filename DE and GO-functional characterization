@@ -1,0 +1,433 @@
+library(dorothea)
+library(dplyr)
+library(Seurat)
+library(tibble)
+library(pheatmap)
+library(tidyr)
+library(viper)
+library(clusterProfiler)
+library(Scillus)
+library(viridis)
+library(enrichplot)
+
+# "Data" is Seurat object 
+
+Idents(Data) <- Data$group
+Data$group <- Idents(Data)
+Idents(Data) <- Data$phenotype_3
+
+# Marker Gene Analysis
+
+AllMarkersNames <- list()
+AllMarkersStat <- list()
+
+for (i in unique(levels(Data))){library(Seurat)
+
+  DE <- list()
+  methods <- c("wilcox","bimod","LR","t", "poisson")
+  
+  for (m in methods){
+  DE[[m]] <- FindMarkers(Data, ident.1 = i, min.pct = 0.2, logfc.threshold = 0.2, only.pos = T, test.use = m, assay = "RNA")
+  write.csv(DE[[m]], file = sprintf("Markers_1_%s.csv",m))}
+
+  sign.genes <- list()
+
+  for (n in names(DE)){
+  DE[[n]] <- DE[[n]][which(DE[[n]]$avg_log2FC > 0.5),]
+  sign.genes[[n]]<- rownames(DE[[n]][which(DE[[n]]$p_val_adj < 0.01),])
+  }
+
+  SignDEG <- names(which(table(unlist(sign.genes)) == 5))
+
+  AllMarkersNames[[i]] <- SignDEG
+
+  DEG <- DE[["wilcox"]][which(rownames(DE[["wilcox"]]) %in% SignDEG == T),]
+  
+  AllMarkersStat[[i]] <- DEG
+
+  write.csv(DEG, file = sprintf("Markers%s.csv",i))
+  
+}
+
+saveRDS(AllMarkersNames, "AllMarkersNames.RDS")
+saveRDS(AllMarkersStat, "AllMarkersStat.RDS")
+
+# Functional Clusters Characterization
+
+# Ordering DEG by logFC
+
+for (i in names(AllMarkersStat)){
+  AllMarkersStat[[i]] <- AllMarkersStat[[i]][order(AllMarkersStat[[i]]$avg_log2FC, decreasing = T),]
+  
+}
+
+# TOP10 MARKERS AND HEATMAP
+
+Top10MarkerStat <- list()
+for (i in names(AllMarkersStat)){
+  Top10MarkerStat[[i]] <- AllMarkersStat[[i]][1:10,]
+  Top10MarkerStat[[i]] <- Top10MarkerStat[[i]][which(is.na(Top10MarkerStat[[i]]$p_val) == F),]
+}
+
+Top10MarkersNamesList <- list()
+for (n in names(Top10MarkerStat)){
+  Top10MarkersNamesList[[n]] <- rownames(Top10MarkerStat[[n]])
+}
+
+Top10MarkersNames <- unlist(Top10MarkersNamesList)
+
+Data@assays[["scilus"]]<- Data@assays[['SCT']]
+Data <- ScaleData(Data, assay = "scilus", features = rownames(Data))
+DefaultAssay(Data) <- "scilus"
+
+plot_heatmap(dataset = Data,
+             markers = Top10MarkersNames,
+             sort_var = c("seurat_clusters","group", "age"),
+             anno_var = c("seurat_clusters","group", "age", "type"),
+             anno_colors = list("Set2",viridis(11), "Set1", "Set3"),
+             hm_colors = viridis(3))
+
+DefaultAssay(Data) <- "RNA"
+
+# tOP100 GENES
+
+Top100MarkerStat <- list()
+for (i in names(AllMarkersStat)){
+  Top100MarkerStat[[i]] <- AllMarkersStat[[i]][1:100,]
+  Top100MarkerStat[[i]] <- Top100MarkerStat[[i]][which(is.na(Top100MarkerStat[[i]]$p_val) == F),]
+  }
+
+saveRDS(Top100MarkerStat, "Top100MarkerStat.RDS")
+
+# LIST WITH TOP 100 DEG NAMES
+
+Top100MarkersNames <- list()
+for (i in names(AllMarkersStat)){
+  Top100MarkersNames[[i]] <- rownames(Top100MarkerStat[[i]])
+}
+
+saveRDS(Top100MarkersNames, "Top100MarkersNames.RDS")
+
+# CLUSTER GO COMPARISON
+
+ClusterGOcomparisonBP <- compareCluster(Top100MarkersNames, fun="enrichGO", OrgDb='org.Mm.eg.db', keyType = "SYMBOL",
+                                        qvalueCutoff=0.01, ont = "BP")
+saveRDS(ClusterGOcomparisonBP, "ClusterGOcomparisonBP.RDS")
+
+dotplot(ClusterGOcomparisonBP, showCategory = 20)
+
+ClusterGOcomparisonBP <- pairwise_termsim(ClusterGOcomparisonBP)
+ClusterGOcomparisonBPsim <- simplify(ClusterGOcomparisonBP, cutoff=0.7, by="p.adjust", select_fun=min)
+emapplot(ClusterGOcomparisonBP, cex_category = 5)
+
+# INDIVIDUAL CLUSTER CHARACTERIZATION
+
+TreePlot <- list()
+
+for (i in names(Top100MarkersNames)){
+  ego <- enrichGO(Top100MarkersNames[[i]], OrgDb = 'org.Mm.eg.db', ont="BP", pvalueCutoff=0.001, keyType = "SYMBOL")
+  ego <- pairwise_termsim(ego)
+  TreePlot[[i]] <- ego
+}
+
+saveRDS(TreePlot, "ClustersTreePlotList.RDS")
+
+Data$seurat_clusters <- Idents(Data)
+plot_stat(Data[,which(Data$phenotype_1 == "Microglia")], plot_type = "prop_fill", group_by = "group", tilt_text = T)
+
+
+### TIMEPOINTS DE ANALYSIS
+
+Idents(Data) <- Data$group
+Data$group <- Idents(Data)
+
+AllGroupMarkersNames <- list()
+AllGroupMarkersStat <- list()
+
+DE <- list()
+methods <- c("wilcox","bimod","LR","t", "poisson")
+
+for (m in methods){
+  DE[[m]] <- FindMarkers(Data, ident.1 = "Young_Control_0", min.pct = 0.2, 
+                         logfc.threshold = 0.693, test.use = m, assay = "RNA")
+  write.csv(DE[[m]], file = sprintf("GroupMarkers%s.csv",m))}
+
+sign.genes <- list()
+
+for (n in names(DE)){
+  sign.genes[[n]]<- rownames(DE[[n]][which(DE[[n]]$p_val_adj < 0.001),])
+}
+
+SignDEG <- names(which(table(unlist(sign.genes)) == 5))
+
+AllGroupMarkersNames[["Young_Control_0"]] <- SignDEG
+
+DEG <- DE[["wilcox"]][which(rownames(DE[["wilcox"]]) %in% SignDEG == T),]
+
+AllGroupMarkersStat[["Young_Control_0"]] <- DEG
+
+write.csv(DEG, file = sprintf("Markers%s.csv","Young_Control_0"))
+
+
+for (i in unique(levels(Data))[-1]){
+  
+  DE <- list()
+  methods <- c("wilcox","bimod","LR","t", "poisson")
+  
+  for (m in methods){
+    DE[[m]] <- FindMarkers(Data, ident.1 = i, ident.2 = "Young_Control_0", min.pct = 0.2, 
+                           logfc.threshold = 0.3, test.use = m, assay = "RNA")
+    write.csv(DE[[m]], file = sprintf("GroupMarkers%s.csv",m))}
+  
+  sign.genes <- list()
+  
+  for (n in names(DE)){
+    sign.genes[[n]]<- rownames(DE[[n]][which(DE[[n]]$p_val_adj < 0.001),])
+  }
+  
+  SignDEG <- names(which(table(unlist(sign.genes)) == 5))
+  
+  AllGroupMarkersNames[[i]] <- SignDEG
+  
+  DEG <- DE[["wilcox"]][which(rownames(DE[["wilcox"]]) %in% SignDEG == T),]
+  
+  AllGroupMarkersStat[[i]] <- DEG
+  
+  write.csv(DEG, file = sprintf("Markers%s.csv",i))
+  
+}
+
+
+# Functional Timepoint Characterization
+
+# Ordering DEG by logFC
+
+for (i in names(AllGroupMarkersStat)){
+  AllGroupMarkersStat[[i]] <- AllGroupMarkersStat[[i]][order(AllGroupMarkersStat[[i]]$avg_log2FC, decreasing = T),]
+  
+}
+
+# TOP10 MARKERS AND HEATMAP
+
+Top10GroupMarkerStat <- list()
+for (i in names(AllGroupMarkersStat)){
+  Top10GroupMarkerStat[[i]] <- AllGroupMarkersStat[[i]][1:10,]
+  Top10GroupMarkerStat[[i]] <- Top10GroupMarkerStat[[i]][which(is.na(Top10GroupMarkerStat[[i]]$p_val) == F),]
+}
+
+Top10Names <- list()
+for (n in names(Top10GroupMarkerStat)){
+  Top10Names[[n]] <- rownames(Top10GroupMarkerStat[[n]])
+}
+
+Top10GroupMarkerNames <- unique(unlist(Top10Names))
+
+Data@assays[["scilus"]]<- Data@assays[['SCT']]
+Data <- ScaleData(Data, assay = "scilus", features = rownames(Data))
+
+DefaultAssay(Data) <- "scilus"
+
+plot_heatmap(dataset = Data,
+             markers = Top10GroupMarkerNames,
+             sort_var = c("group", "age"),
+             anno_var = c("seurat_clusters","group", "age", "type"),
+             anno_colors = list("Set2",viridis(11), "Set1", "Set3"),
+             hm_colors = plasma(3))
+
+DefaultAssay(Data) <- "RNA"
+
+# TIMEPOINT FUNCTIONAL CHARACTERIZATION
+
+# tOP100 GENES
+
+Top100GroupMarkerStat <- list()
+for (i in names(AllGroupMarkersStat)){
+  Top100GroupMarkerStat[[i]] <- AllGroupMarkersStat[[i]][1:100,]
+  Top100GroupMarkerStat[[i]] <- Top100GroupMarkerStat[[i]][which(is.na(Top100GroupMarkerStat[[i]]$p_val) == F),]
+}
+
+saveRDS(Top100GroupMarkerStat, "Top100GroupMarkerStat.RDS")
+
+# LIST WITH TOP 100 DEG NAMES
+
+Top100GroupMarkersNames <- list()
+for (i in names(AllGroupMarkersStat)){
+  Top100GroupMarkersNames[[i]] <- rownames(Top100GroupMarkerStat[[i]])
+}
+
+saveRDS(Top100GroupMarkersNames, "Top100GroupMarkersNames.RDS")
+
+# CLUSTER GO COMPARISON
+
+TimepointGOcomparisonBP <- compareCluster(Top100GroupMarkersNames, fun="enrichGO", OrgDb='org.Mm.eg.db', keyType = "SYMBOL", pvalueCutoff=0.001, ont = "BP")
+saveRDS(TimepointGOcomparisonBP, "TimepointGOcomparisonBP.RDS")
+
+dotplot(TimepointGOcomparisonBP, showCategory = 40)
+
+TimepointGOcomparisonBP <- pairwise_termsim(TimepointGOcomparisonBP)
+TimepointGOcomparisonBPsim <- simplify(TimepointGOcomparisonBP, cutoff=0.7, by="p.adjust", select_fun=min)
+emapplot(TimepointGOcomparisonBP)
+
+
+
+##### NEEEWWWWW Time Analysis #####
+
+AllMarkersNames <- list()
+AllMarkersStat <- list()
+
+for (i in levels(Data)){
+  
+  DE <- list()
+  methods <- c("wilcox","bimod","LR","t", "poisson")
+  for (m in methods){
+    DE[[m]] <- FindMarkers(Data, ident.1 = "Young_Control", group.by = 'age_type', subset.ident = i,
+                         min.pct = 0.2, logfc.threshold = 0.2, only.pos = F, test.use = m, assay = "RNA", min.cells.feature = 0,
+                         min.cells.group = 0)
+    write.csv(DE[[m]], file = sprintf("Markers_1_%s.csv",m))}
+  
+  sign.genes <- list()
+  
+  for (n in names(DE)){
+    DE[[n]] <- DE[[n]][which(DE[[n]]$avg_log2FC > 0.5),]
+    sign.genes[[n]]<- rownames(DE[[n]][which(DE[[n]]$p_val_adj < 0.01),])
+  }
+  
+  SignDEG <- names(which(table(unlist(sign.genes)) == 5))
+  
+  AllMarkersNames[[i]] <- SignDEG
+  
+  DEG <- DE[["wilcox"]][which(rownames(DE[["wilcox"]]) %in% SignDEG == T),]
+  
+  AllMarkersStat[[i]] <- DEG
+  
+  write.csv(DEG, file = sprintf("Markers%s.csv",i))
+  
+  }
+
+saveRDS(AllMarkersNames, "AllMarkersNames.RDS")
+saveRDS(AllMarkersStat, "AllMarkersStat.RDS")
+
+NumberDEG <- data.frame(Cell = names(AllMarkersNames), Numbers = lengths(AllMarkersNames))
+
+
+NumberDEG[order(NumberDEG$Numbers, decreasing = T),]$Cell
+
+
+
+NumberDEGGraph <- ggplot(data=NumberDEG, aes(x=Cell, y=Numbers, fill = Numbers)) +
+geom_bar(stat="identity")
+NumberDEGGraph + 
+  scale_x_discrete(limits= NumberDEG[order(NumberDEG$Numbers, decreasing = T),]$Cell) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + scale_fill_gradient(low="blue", high="red")
+
+CommonUpGenes <- names(which(table(unlist(AllMarkersNames)) > 4))
+
+AllMarkersStatWoCommon <- list()
+
+for (i in NumberDEG$Cell){
+  AllMarkersStatWoCommon[[i]] <- AllMarkersStat[[i]][setdiff(rownames(AllMarkersStat[[i]]), CommonUpGenes),]
+  AllMarkersStatWoCommon[[i]] <- AllMarkersStatWoCommon[[i]][order(AllMarkersStatWoCommon[[i]]$avg_log2FC, decreasing = T),]
+  
+}
+
+# TOP100 MARKERS AND HEATMAP
+
+Top10MarkerStatwoCommon <- list()
+for (i in NumberDEG$Cell){
+  Top10MarkerStatwoCommon[[i]] <- AllMarkersStatWoCommon[[i]][1:100,]
+  Top10MarkerStatwoCommon[[i]] <- Top10MarkerStatwoCommon[[i]][which(is.na(Top10MarkerStatwoCommon[[i]]$p_val) == F),]
+}
+
+Top10MarkersWoCommonNamesList <- list()
+for (n in names(Top10MarkerStatwoCommon)){
+  Top10MarkersWoCommonNamesList[[n]] <- rownames(Top10MarkerStatwoCommon[[n]])
+}
+
+Top10MarkersNamesWoCommon <- unlist(Top10MarkersWoCommonNamesList)
+
+
+DefaultAssay(Data) <- "scilus"
+
+plot_heatmap(dataset = Data,
+             markers = c(CommonUpGenes, Top10MarkersNamesWoCommon),
+             sort_var = c("phenotype_1","group", "age_type"),
+             anno_var = c("phenotype_1","group", "age_type"),
+             anno_colors = list("Set2",viridis(11), "Set1", "Set3"),
+             hm_colors = c("navy", "white", "red3"),
+             row_font_size = 0,
+             hm_limit = c(-1,0,1))
+
+
+DataInj <- subset(Data, idents = "Young_WMS")
+Ave <-AverageExpression(Data, features = c(CommonUpGenes, Top10MarkersNamesWoCommon), group.by = c("phenotype_1", "age_type"), slot = "scale.data")
+pheatmap(Ave$scilus, cluster_cols  = F, cluster_rows = F, color=colorRampPalette(c("navy", "white", "red3"))(100), scale = "row", 
+         gaps_col  = c(2,4,6,8,10,12,14,16,18,20,22,24,26,28,30), fontsize_row = 0.5)
+         
+
+
+TimepointGOcomparisonBP <- compareCluster(Top10MarkersWoCommonNamesListUP, fun="enrichGO", OrgDb='org.Mm.eg.db', keyType = "SYMBOL", pvalueCutoff=0.01, ont = "BP")
+saveRDS(TimepointGOcomparisonBP, "TimepointGOcomparisonBP.RDS")
+
+dotplot(TimepointGOcomparisonBP, showCategory = 10)
+
+TimepointGOcomparisonBP <- pairwise_termsim(TimepointGOcomparisonBP)
+TimepointGOcomparisonBPsim <- simplify(TimepointGOcomparisonBP, cutoff=0.7, by="p.adjust", select_fun=min)
+emapplot(TimepointGOcomparisonBPsim, cex_category = 5)
+
+
+AllMarkersNamesUP <- AllMarkersNames
+AllMarkersStatUP <- AllMarkersStat
+AllMarkersStatWoCommonUP <- AllMarkersStatWoCommon
+AveUP <- AvehowCategory =
+NumberDEGUP <- NumberDEG
+NumberDEGGraphUP <- NumberDEGGraph
+Top10MarkerStatwoCommonUP <- Top10MarkerStatwoCommon
+Top10MarkersWoCommonNamesListUP <- Top10MarkersWoCommonNamesList
+CommonUpGenesUP <- CommonUpGenes
+Top10MarkersNamesWoCommonUP <- Top10MarkersNamesWoCommon 
+
+for (i in names(AllMarkersStatUP)){
+  AllMarkersStatUP[[i]] <- AllMarkersStatUP[[i]][order(AllMarkersStatUP[[i]]$avg_log2FC, decreasing = T),]
+  
+}
+
+
+AllMarkersNamesDown <- AllMarkersNames
+AllMarkersStatDown <- AllMarkersStat
+AllMarkersStatWoCommonDown <- AllMarkersStatWoCommon
+AveDown <- Ave
+NumberDEGDown <- NumberDEG
+NumberDEGGraphDown <- NumberDEGGraph
+Top10MarkerStatwoCommonDown <- Top10MarkerStatwoCommon
+Top10MarkersWoCommonNamesListDown <- Top10MarkersWoCommonNamesList
+CommonUpGenesDown <- CommonUpGenes
+Top10MarkersNamesWoCommonDown <- Top10MarkersNamesWoCommon 
+
+for (i in names(AllMarkersStatDown)){
+  AllMarkersStatDown[[i]] <- AllMarkersStatDown[[i]][order(AllMarkersStatDown[[i]]$avg_log2FC),]
+  
+}
+
+NumberDEGUPDOWN <- NumberDEGUP
+NumberDEGUPDOWN$Down <- NumberDEGDown$Numbers
+NumberDEGUPDOWN <- rename(NumberDEGUPDOWN, Up = Numbers)
+NumberDEGUPDOWNMelt <- melt(NumberDEGUPDOWN, id.vars='Cell')
+NumberDEGUPDOWNMelt <- rename(NumberDEGUPDOWNMelt, DEG_Number = value)
+NumberDEGUPDOWNMelt <- rename(NumberDEGUPDOWNMelt, Regulation = variable)
+
+ggplot(NumberDEGUPDOWNMelt, aes(x=Cell, y=DEG_Number, fill=Regulation)) +
+  geom_bar(stat='identity', position='dodge') + scale_x_discrete(limits= NumberDEGUP[order(NumberDEGUP$Numbers, decreasing = T),]$Cell) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + geom_hline(yintercept=0, linetype="dashed", color = "red")  + geom_hline(yintercept=0, linetype="dashed", color = "blue")
+
+
+Genelist <- list(YwSpecific[["OPC_UP"]], YdSpecific[["OPC_UP"]], AcSpecific[["OPC_UP"]], YwYdWOcommonInt[["OPC_UP"]],
+              YwAcWOcommonInt[["OPC_UP"]], YdAcWOcommonInt[["OPC_UP"]], YwdAcInt[["OPC_UP"]], YwSpecific[["OPC_DOWN"]], 
+              YdSpecific[["OPC_DOWN"]], AcSpecific[["OPC_DOWN"]], YwYdWOcommonInt[["OPC_DOWN"]],
+              YwAcWOcommonInt[["OPC_DOWN"]], YdAcWOcommonInt[["OPC_DOWN"]], YwdAcInt[["OPC_DOWN"]])
+
+GenelistNames <- c("YwSpecific_UP", "YdSpecific_UP", "AcSpecific_UP", "YwYdWOcommonInt_UP",
+                 "YwAcWOcommonInt_UP", "YdAcWOcommonInt_UP", "YwdAcInt_UP", "YwSpecific_DOWN", 
+                 "YdSpecific_DOWN", "AcSpecific_DOWN", "YwYdWOcommonInt_DOWN",
+                 "YwAcWOcommonInt_DOWN", "YdAcWOcommonInt_DOWN", "YwdAcInt_DOWN")
+
+names(Genelist) <- GenelistNames
